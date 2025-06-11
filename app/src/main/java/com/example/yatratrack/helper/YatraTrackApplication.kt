@@ -3,7 +3,10 @@ package com.example.yatratrack.helper
 import android.app.Application
 import android.util.Log
 import androidx.work.Configuration
+import androidx.work.Constraints
+import androidx.work.NetworkType
 import androidx.work.WorkManager
+import java.util.concurrent.Executors
 
 class YatraTrackApplication : Application(), Configuration.Provider {
 
@@ -27,6 +30,9 @@ class YatraTrackApplication : Application(), Configuration.Provider {
     override fun getWorkManagerConfiguration(): Configuration {
         return Configuration.Builder()
             .setMinimumLoggingLevel(Log.DEBUG)
+            .setExecutor(Executors.newFixedThreadPool(4)) // Dedicated thread pool
+            .setTaskExecutor(Executors.newFixedThreadPool(4))
+            .setJobSchedulerJobIdRange(1000, 20000) // Avoid conflicts with other job IDs
             .build()
     }
 }

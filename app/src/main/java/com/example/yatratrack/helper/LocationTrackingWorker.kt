@@ -1,20 +1,14 @@
 package com.example.yatratrack.helper
 
 import android.Manifest
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
-import android.content.pm.ServiceInfo
 import android.location.Location
 import android.os.Build
 import android.util.Log
 import androidx.core.app.ActivityCompat
-import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
-import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
-import com.example.yatratrack.R
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -22,6 +16,7 @@ import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.coroutines.resume
@@ -48,16 +43,12 @@ class LocationTrackingWorker(
         const val TAG = "LocationTrackingWorker"
         const val LOCATIONS_KEY = "tracked_locations"
         const val PREFS_NAME = "yatra_prefs"
-        const val NOTIFICATION_ID = 1001
-        const val NOTIFICATION_CHANNEL_ID = "location_tracking_channel"
+        const val LOCATION_TIMEOUT_MS = 30000L // 30 seconds timeout
     }
 
     override suspend fun doWork(): Result {
         return try {
-            Log.d(TAG, "LocationTrackingWorker started")
-
-            // Create foreground notification for long-running task
-            setForeground(createForegroundInfo())
+            Log.d(TAG, "LocationTrackingWorker started - Run attempt: ${runAttemptCount}")
 
             // Check if location permissions are granted
             if (!hasLocationPermissions()) {
@@ -65,66 +56,37 @@ class LocationTrackingWorker(
                 return Result.failure()
             }
 
-            // Get current location
-            val location = getCurrentLocation()
+            // Get current location with timeout
+            val location = withTimeoutOrNull(LOCATION_TIMEOUT_MS) {
+                getCurrentLocation()
+            }
 
             if (location != null) {
                 // Save location to SharedPreferences
                 saveLocationToPrefs(location)
-                Log.d(TAG, "Location saved: ${location.latitude}, ${location.longitude}")
+                Log.d(TAG, "Location saved successfully: ${location.latitude}, ${location.longitude}")
+
+                // Update last successful fetch time
+                updateLastSuccessfulFetch()
+
                 Result.success()
             } else {
-                Log.w(TAG, "Failed to get location")
-                Result.retry()
+                Log.w(TAG, "Failed to get location within timeout")
+                // Retry only if we haven't exceeded max attempts
+                if (runAttemptCount < 3) {
+                    Result.retry()
+                } else {
+                    Result.failure()
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in LocationTrackingWorker", e)
-            Result.failure()
-        }
-    }
-
-    // FIXED: Added proper foreground service type for Android 12+
-    private fun createForegroundInfo(): ForegroundInfo {
-        createNotificationChannel()
-
-        val notification = NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("Yatra Track")
-            .setContentText("Tracking your location for safety")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setOngoing(true)
-            .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // For Android 10+ (API 29+), specify the foreground service type
-            ForegroundInfo(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            )
-        } else {
-            // For older versions
-            ForegroundInfo(NOTIFICATION_ID, notification)
-        }
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-            val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                "Location Tracking",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Background location tracking for safety"
-                setShowBadge(false)
-                setSound(null, null)
-                enableVibration(false)
+            // Retry on transient errors, fail on permanent ones
+            if (runAttemptCount < 3) {
+                Result.retry()
+            } else {
+                Result.failure()
             }
-
-            notificationManager.createNotificationChannel(channel)
         }
     }
 
@@ -173,18 +135,16 @@ class LocationTrackingWorker(
                 cancellationTokenSource.cancel()
             }
 
-            // Use PRIORITY_BALANCED_POWER_ACCURACY for background location
-            val priority = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                Priority.PRIORITY_BALANCED_POWER_ACCURACY
-            } else {
-                Priority.PRIORITY_HIGH_ACCURACY
-            }
+            // Use balanced power accuracy for better battery life in background
+            val priority = Priority.PRIORITY_BALANCED_POWER_ACCURACY
+
+            Log.d(TAG, "Requesting location with priority: $priority")
 
             fusedLocationClient.getCurrentLocation(
                 priority,
                 cancellationTokenSource.token
             ).addOnSuccessListener { location ->
-                Log.d(TAG, "Location obtained: $location")
+                Log.d(TAG, "Location obtained: lat=${location?.latitude}, lng=${location?.longitude}, accuracy=${location?.accuracy}")
                 continuation.resume(location)
             }.addOnFailureListener { exception ->
                 Log.e(TAG, "Failed to get location", exception)
@@ -205,6 +165,7 @@ class LocationTrackingWorker(
             val type = object : TypeToken<List<LocationData>>() {}.type
             gson.fromJson(existingLocationsJson, type) ?: mutableListOf()
         } catch (e: Exception) {
+            Log.e(TAG, "Error parsing existing locations", e)
             mutableListOf()
         }
 
@@ -220,8 +181,8 @@ class LocationTrackingWorker(
         // Add new location
         existingLocations.add(newLocation)
 
-        // Keep only last 100 locations to prevent storage bloat
-        if (existingLocations.size > 100) {
+        // Keep only last 500 locations to prevent storage bloat
+        if (existingLocations.size > 500) {
             existingLocations.removeAt(0)
         }
 
@@ -230,5 +191,10 @@ class LocationTrackingWorker(
         sharedPrefs.edit().putString(LOCATIONS_KEY, updatedJson).apply()
 
         Log.d(TAG, "Total locations saved: ${existingLocations.size}")
+    }
+
+    private fun updateLastSuccessfulFetch() {
+        val sharedPrefs = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        sharedPrefs.edit().putLong("last_successful_fetch", System.currentTimeMillis()).apply()
     }
 }

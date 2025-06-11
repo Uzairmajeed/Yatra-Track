@@ -3,6 +3,7 @@ package com.example.yatratrack.screens
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -101,11 +102,15 @@ fun MapScreen(navController: NavController) {
                 isLoadingLocation = false
             }
 
-            // Always ensure periodic tracking is running (this is safe to call multiple times)
-            workManagerHelper.startLocationTracking()
+            // Check if tracking is already active, restart if needed
+            if (!workManagerHelper.isLocationTrackingActive()) {
+                Log.d("MapScreen", "Restarting location tracking")
+                workManagerHelper.restartLocationTracking()
+            } else {
+                Log.d("MapScreen", "Location tracking already active")
+            }
         }
     }
-
     // Auto-refresh locations every 30 seconds when both permissions are granted
     LaunchedEffect(hasLocationPermission, hasBackgroundLocationPermission) {
         if (hasLocationPermission && hasBackgroundLocationPermission) {
