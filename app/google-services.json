@@ -1,0 +1,76 @@
+{
+  "project_info": {
+    "project_number": "417253505539",
+    "project_id": "amarnath-yatra-iccc",
+    "storage_bucket": "amarnath-yatra-iccc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:417253505539:android:acbe7f0b87ee037b3a6c36",
+        "android_client_info": {
+          "package_name": "com.example.yatratrack"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "417253505539-pgb0c1u7qccdme8iqlufclklt413r9th.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCktX3LCgBVCYHOzPK91_bEc0FatP5hxrw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "417253505539-pgb0c1u7qccdme8iqlufclklt413r9th.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:417253505539:android:77fb5bb8326a4bf23a6c36",
+        "android_client_info": {
+          "package_name": "com.pilgrimtrackerapp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "417253505539-42i0mu3nfbg41o07jtks8sdt4ippqd7h.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.pilgrimtrackerapp",
+            "certificate_hash": "b58fba1c6e524be396c1daa5da3ad0faebf59a74"
+          }
+        },
+        {
+          "client_id": "417253505539-pgb0c1u7qccdme8iqlufclklt413r9th.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCktX3LCgBVCYHOzPK91_bEc0FatP5hxrw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "417253505539-pgb0c1u7qccdme8iqlufclklt413r9th.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
