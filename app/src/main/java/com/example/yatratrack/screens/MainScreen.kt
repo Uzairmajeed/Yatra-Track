@@ -1,8 +1,6 @@
 package com.example.yatratrack.screens
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -29,12 +27,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.example.yatratrack.R
 import com.example.yatratrack.helper.WorkManagerHelper
+import com.example.yatratrack.helper.rememberPermissionManager
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 import kotlinx.coroutines.delay
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.util.lerp
+import kotlin.math.absoluteValue
 
 data class MenuOption(
     val title: String,
@@ -46,11 +52,8 @@ data class MenuOption(
 fun MainScreen(navController: NavController) {
     val context = LocalContext.current
     val workManagerHelper = remember { WorkManagerHelper(context) }
+    val permissionManager = rememberPermissionManager(workManagerHelper)
     var selectedOption by remember { mutableStateOf<String?>(null) }
-    var hasLocationPermission by remember { mutableStateOf(false) }
-    var hasBackgroundLocationPermission by remember { mutableStateOf(false) }
-    var permissionJustGranted by remember { mutableStateOf(false) }
-    var showBackgroundLocationDialog by remember { mutableStateOf(false) }
     val systemUiController = rememberSystemUiController()
 
     SideEffect {
@@ -60,82 +63,36 @@ fun MainScreen(navController: NavController) {
         )
     }
 
-    // Check location permission status and handle initial setup
+    // Start location tracking if permissions are already granted
     LaunchedEffect(Unit) {
-        hasLocationPermission = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-
-        hasBackgroundLocationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_BACKGROUND_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true // Not required for API < 29
-        }
-
-        if (hasLocationPermission && hasBackgroundLocationPermission) {
-            // Always ensure periodic tracking is running (this is safe to call multiple times)
-            workManagerHelper.startLocationTracking()
-        }
-    }
-
-    // Handle permission just granted (this is when user grants permission for the first time)
-    LaunchedEffect(permissionJustGranted) {
-        if (permissionJustGranted) {
-            if (hasLocationPermission && hasBackgroundLocationPermission) {
-                workManagerHelper.startLocationTracking()
-            }
-            permissionJustGranted = false
-        }
+        permissionManager.startLocationTrackingIfPermitted()
     }
 
     // Permission launcher for basic location permissions
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-
-        hasLocationPermission = granted
-
-        if (granted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasBackgroundLocationPermission) {
-            // Show dialog to explain background location permission
-            showBackgroundLocationDialog = true
-        } else if (granted) {
-            // Trigger the LaunchedEffect to handle permission granted
-            permissionJustGranted = true
-        }
+        permissionManager.handleLocationPermissionResult(permissions)
     }
 
     // Background location permission launcher
     val backgroundLocationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        hasBackgroundLocationPermission = granted
-        if (granted && hasLocationPermission) {
-            workManagerHelper.startLocationTracking()
-        }
+        permissionManager.handleBackgroundLocationPermissionResult(granted)
     }
 
     // Request permission when screen loads (if not already granted)
-    LaunchedEffect(hasLocationPermission) {
-        if (!hasLocationPermission) {
-            permissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                )
-            )
+    LaunchedEffect(permissionManager.hasLocationPermission) {
+        if (permissionManager.shouldRequestLocationPermission()) {
+            permissionLauncher.launch(permissionManager.getLocationPermissions())
         }
     }
 
     // Background Location Permission Dialog
-    if (showBackgroundLocationDialog) {
+    if (permissionManager.showBackgroundLocationDialog) {
         AlertDialog(
-            onDismissRequest = { showBackgroundLocationDialog = false },
+            onDismissRequest = { permissionManager.dismissBackgroundLocationDialog() },
             title = { Text("Background Location Required") },
             text = {
                 Text("For continuous location tracking even when the app is closed, please allow 'Allow all the time' when prompted for location permission.")
@@ -143,10 +100,7 @@ fun MainScreen(navController: NavController) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        showBackgroundLocationDialog = false
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                        }
+                        permissionManager.requestBackgroundLocationPermission(backgroundLocationLauncher)
                     }
                 ) {
                     Text("Continue")
@@ -154,7 +108,7 @@ fun MainScreen(navController: NavController) {
             },
             dismissButton = {
                 TextButton(
-                    onClick = { showBackgroundLocationDialog = false }
+                    onClick = { permissionManager.dismissBackgroundLocationDialog() }
                 ) {
                     Text("Skip")
                 }
@@ -222,23 +176,59 @@ fun MainScreen(navController: NavController) {
             .statusBarsPadding()
             .background(Color(0xFFF5F5F5))
     ) {
-        // Header Image Section
+        // Header Section with Logo and Title
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(200.dp)
-                .clip(RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
+                .background(Color.White)
+                .padding(vertical = 10.dp, horizontal = 8.dp)
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.amarnath_cave),
-                contentDescription = "Amarnath Cave",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Start
+            ) {
+                // Logo
+                Image(
+                    painter = painterResource(id = R.drawable.headerlogo), // Replace with your logo drawable
+                    contentDescription = "Amarnath Yatra Logo",
+                    modifier = Modifier.size(60.dp)
+                )
+
+                Spacer(modifier = Modifier.width(16.dp))
+
+                // Title
+                Text(
+                    text = "Amarnath Yatra 2025",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF1565C0)
+                )
+            }
+        }
+
+        // Header Image Carousel Section
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp)
+        ) {
+            // Image list for carousel
+            val carouselImages = listOf(
+                R.drawable.amarnath_cave,
+                R.drawable.image1,
+                R.drawable.image2,
+                R.drawable.image3
+            )
+
+            EnhancedImageCarousel(
+                images = carouselImages,
+                modifier = Modifier.fillMaxWidth()
             )
         }
 
         // Permission status card
-        if (!hasLocationPermission || !hasBackgroundLocationPermission) {
+        if (!permissionManager.isAllPermissionsGranted()) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -253,8 +243,8 @@ fun MainScreen(navController: NavController) {
                     )
                     Text(
                         text = when {
-                            !hasLocationPermission -> "Basic location permission is required"
-                            !hasBackgroundLocationPermission -> "Background location permission needed for continuous tracking"
+                            !permissionManager.hasLocationPermission -> "Basic location permission is required"
+                            !permissionManager.hasBackgroundLocationPermission -> "Background location permission needed for continuous tracking"
                             else -> ""
                         },
                         color = Color(0xFFD32F2F),
@@ -299,12 +289,14 @@ fun MainScreen(navController: NavController) {
         }
 
         // Footer Section
-        Card(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1976D2)),
-            shape = RoundedCornerShape(8.dp)
+                .padding(16.dp)
+                .background(
+                    color = Color(0xFF1976D2),
+                    shape = RoundedCornerShape(8.dp)
+                )
         ) {
             Row(
                 modifier = Modifier
@@ -320,7 +312,7 @@ fun MainScreen(navController: NavController) {
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "© 2025 Amarnath Yatra App | Developed by MSP",
+                    text = "© 2025 Amarnath Yatra App \nAn Initiative By ICCC Srinagar",
                     color = Color.White,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium
@@ -338,7 +330,7 @@ fun MenuCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(120.dp)
+            .height(110.dp)
             .clickable { onClick() },
         colors = CardDefaults.cardColors(containerColor = Color.White),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
@@ -366,6 +358,129 @@ fun MenuCard(
                 color = Color(0xFF1976D2),
                 lineHeight = 16.sp
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun EnhancedImageCarousel(
+    images: List<Int>,
+    modifier: Modifier = Modifier
+) {
+    // Start from the second image (index 1)
+    val pagerState = rememberPagerState(
+        initialPage = 1,
+        pageCount = { images.size }
+    )
+
+    // Auto-scroll effect
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(4000) // Change image every 4 seconds
+            val nextPage = (pagerState.currentPage + 1) % images.size
+            pagerState.animateScrollToPage(nextPage)
+        }
+    }
+
+    Column {
+        // Enhanced Carousel with side previews - HIGHLY VISIBLE SIDE IMAGES
+        HorizontalPager(
+            state = pagerState,
+            modifier = modifier
+                .fillMaxWidth()
+                .height(170.dp), // Reduced from 200.dp to 140.dp
+            contentPadding = PaddingValues(horizontal = 60.dp), // More padding = more visible sides
+            pageSpacing = 6.dp // Less spacing = closer images
+        ) { page ->
+            Card(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        // Calculate the offset from the current page
+                        val pageOffset = (
+                                (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
+                                ).absoluteValue
+
+                        // Apply scaling - side images are 80% size (very visible)
+                        scaleX = lerp(
+                            start = 0.8f, // Much larger side images
+                            stop = 1f,
+                            fraction = 1f - pageOffset.coerceIn(0f, 1f)
+                        )
+                        scaleY = lerp(
+                            start = 0.8f, // Much larger side images
+                            stop = 1f,
+                            fraction = 1f - pageOffset.coerceIn(0f, 1f)
+                        )
+
+                        // Apply alpha - side images are 85% opacity (highly visible)
+                        alpha = lerp(
+                            start = 0.85f, // Much more visible
+                            stop = 1.0f,
+                            fraction = 1f - pageOffset.coerceIn(0f, 1f)
+                        )
+                    },
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(
+                    defaultElevation = if (page == pagerState.currentPage) 8.dp else 4.dp
+                )
+            ) {
+                Box {
+                    Image(
+                        painter = painterResource(id = images[page]),
+                        contentDescription = "Amarnath Yatra Image ${page + 1}",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+
+                    // Gradient overlay for better contrast
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.Transparent,
+                                        Color.Black.copy(alpha = 0.2f) // Lighter overlay
+                                    ),
+                                    startY = 0f,
+                                    endY = Float.POSITIVE_INFINITY
+                                )
+                            )
+                    )
+                }
+            }
+        }
+
+        // Enhanced Dot Indicators
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            images.forEachIndexed { index, _ ->
+                val isSelected = index == pagerState.currentPage
+                Box(
+                    modifier = Modifier
+                        .size(
+                            width = if (isSelected) 24.dp else 8.dp,
+                            height = 8.dp
+                        )
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(
+                            if (isSelected) Color(0xFF1565C0)
+                            else Color(0xFFBDBDBD)
+                        )
+                        .animateContentSize(
+                            animationSpec = tween(300)
+                        )
+                )
+                if (index < images.size - 1) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+            }
         }
     }
 }

@@ -1,7 +1,5 @@
 package com.example.yatratrack.screens
 
-import android.Manifest
-import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,11 +23,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.example.yatratrack.helper.LocationData
 import com.example.yatratrack.helper.LocationRepository
 import com.example.yatratrack.helper.WorkManagerHelper
+import com.example.yatratrack.helper.rememberPermissionManager
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 import kotlinx.coroutines.delay
 
@@ -39,14 +37,12 @@ fun MapScreen(navController: NavController) {
     val context = LocalContext.current
     val locationRepository = remember { LocationRepository(context) }
     val workManagerHelper = remember { WorkManagerHelper(context) }
+    val permissionManager = rememberPermissionManager(workManagerHelper)
 
     var locations by remember { mutableStateOf<List<LocationData>>(emptyList()) }
-    var hasLocationPermission by remember { mutableStateOf(false) }
-    var hasBackgroundLocationPermission by remember { mutableStateOf(false) }
     var isLoadingLocation by remember { mutableStateOf(false) }
     var shouldFetchLocation by remember { mutableStateOf(false) }
     var permissionJustGranted by remember { mutableStateOf(false) }
-    var showBackgroundLocationDialog by remember { mutableStateOf(false) }
 
     val systemUiController = rememberSystemUiController()
     SideEffect {
@@ -70,24 +66,10 @@ fun MapScreen(navController: NavController) {
 
     // Check initial permission status and handle first-time location fetch
     LaunchedEffect(Unit) {
-        hasLocationPermission = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-
-        hasBackgroundLocationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_BACKGROUND_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true // Not required for API < 29
-        }
-
         // Load existing locations first
         locations = locationRepository.getAllLocations()
 
-        if (hasLocationPermission && hasBackgroundLocationPermission) {
+        if (permissionManager.isAllPermissionsGranted()) {
             // Only fetch location immediately if this is the very first app launch
             if (isFirstAppLaunch()) {
                 isLoadingLocation = true
@@ -111,9 +93,10 @@ fun MapScreen(navController: NavController) {
             }
         }
     }
+
     // Auto-refresh locations every 30 seconds when both permissions are granted
-    LaunchedEffect(hasLocationPermission, hasBackgroundLocationPermission) {
-        if (hasLocationPermission && hasBackgroundLocationPermission) {
+    LaunchedEffect(permissionManager.hasLocationPermission, permissionManager.hasBackgroundLocationPermission) {
+        if (permissionManager.isAllPermissionsGranted()) {
             while (true) {
                 delay(30000) // 30 seconds
                 locations = locationRepository.getAllLocations()
@@ -135,7 +118,7 @@ fun MapScreen(navController: NavController) {
 
     // Handle permission just granted (this is when user grants permission for the first time)
     LaunchedEffect(permissionJustGranted) {
-        if (permissionJustGranted && hasLocationPermission && hasBackgroundLocationPermission) {
+        if (permissionJustGranted && permissionManager.isAllPermissionsGranted()) {
             isLoadingLocation = true
             workManagerHelper.fetchLocationImmediately()
             workManagerHelper.startLocationTracking()
@@ -154,16 +137,8 @@ fun MapScreen(navController: NavController) {
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-
-        hasLocationPermission = granted
-
-        if (granted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasBackgroundLocationPermission) {
-            // Show dialog to explain background location permission
-            showBackgroundLocationDialog = true
-        } else if (granted && hasBackgroundLocationPermission) {
-            // Trigger the LaunchedEffect to handle permission granted
+        permissionManager.handleLocationPermissionResult(permissions)
+        if (permissionManager.isAllPermissionsGranted()) {
             permissionJustGranted = true
         }
     }
@@ -172,17 +147,16 @@ fun MapScreen(navController: NavController) {
     val backgroundLocationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        hasBackgroundLocationPermission = granted
-        if (granted && hasLocationPermission) {
-            workManagerHelper.startLocationTracking()
+        permissionManager.handleBackgroundLocationPermissionResult(granted)
+        if (granted && permissionManager.hasLocationPermission) {
             permissionJustGranted = true
         }
     }
 
     // Background Location Permission Dialog
-    if (showBackgroundLocationDialog) {
+    if (permissionManager.showBackgroundLocationDialog) {
         AlertDialog(
-            onDismissRequest = { showBackgroundLocationDialog = false },
+            onDismissRequest = { permissionManager.dismissBackgroundLocationDialog() },
             title = { Text("Background Location Required") },
             text = {
                 Text("For continuous location tracking even when the app is closed, please allow 'Allow all the time' when prompted for location permission.")
@@ -190,10 +164,7 @@ fun MapScreen(navController: NavController) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        showBackgroundLocationDialog = false
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                        }
+                        permissionManager.requestBackgroundLocationPermission(backgroundLocationLauncher)
                     }
                 ) {
                     Text("Continue")
@@ -201,7 +172,7 @@ fun MapScreen(navController: NavController) {
             },
             dismissButton = {
                 TextButton(
-                    onClick = { showBackgroundLocationDialog = false }
+                    onClick = { permissionManager.dismissBackgroundLocationDialog() }
                 ) {
                     Text("Skip")
                 }
@@ -244,7 +215,7 @@ fun MapScreen(navController: NavController) {
                 .padding(16.dp)
         ) {
             // Permission Card
-            if (!hasLocationPermission || !hasBackgroundLocationPermission) {
+            if (!permissionManager.isAllPermissionsGranted()) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))
@@ -259,8 +230,8 @@ fun MapScreen(navController: NavController) {
                         )
                         Text(
                             text = when {
-                                !hasLocationPermission -> "Basic location permission is required for tracking."
-                                !hasBackgroundLocationPermission -> "Background location permission is needed for continuous tracking when app is closed."
+                                !permissionManager.hasLocationPermission -> "Basic location permission is required for tracking."
+                                !permissionManager.hasBackgroundLocationPermission -> "Background location permission is needed for continuous tracking when app is closed."
                                 else -> ""
                             },
                             color = Color(0xFFD32F2F),
@@ -269,22 +240,17 @@ fun MapScreen(navController: NavController) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             onClick = {
-                                if (!hasLocationPermission) {
-                                    permissionLauncher.launch(
-                                        arrayOf(
-                                            Manifest.permission.ACCESS_FINE_LOCATION,
-                                            Manifest.permission.ACCESS_COARSE_LOCATION
-                                        )
-                                    )
-                                } else if (!hasBackgroundLocationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                    showBackgroundLocationDialog = true
+                                if (!permissionManager.hasLocationPermission) {
+                                    permissionLauncher.launch(permissionManager.getLocationPermissions())
+                                } else if (!permissionManager.hasBackgroundLocationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    permissionManager.requestBackgroundLocationPermission(backgroundLocationLauncher)
                                 }
                             }
                         ) {
                             Text(
                                 text = when {
-                                    !hasLocationPermission -> "Grant Location Permission"
-                                    !hasBackgroundLocationPermission -> "Grant Background Permission"
+                                    !permissionManager.hasLocationPermission -> "Grant Location Permission"
+                                    !permissionManager.hasBackgroundLocationPermission -> "Grant Background Permission"
                                     else -> "Grant Permission"
                                 }
                             )
@@ -322,7 +288,7 @@ fun MapScreen(navController: NavController) {
             }
 
             // Stats Card
-            if (hasLocationPermission && hasBackgroundLocationPermission) {
+            if (permissionManager.isAllPermissionsGranted()) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD))
@@ -416,7 +382,7 @@ fun MapScreen(navController: NavController) {
             }
 
             // Locations List
-            if (hasLocationPermission && hasBackgroundLocationPermission) {
+            if (permissionManager.isAllPermissionsGranted()) {
                 if (locations.isNotEmpty()) {
                     Text(
                         text = "Recent Locations (${locations.size})",

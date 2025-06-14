@@ -30,8 +30,12 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.example.yatratrack.model.RegisterRequest
 import com.example.yatratrack.navigation.Screen
+import com.example.yatratrack.viewmodel.RegisterViewModel
+import com.example.yatratrack.viewmodel.RegistrationState
 import com.google.firebase.FirebaseException
 import com.google.firebase.auth.*
 import kotlinx.coroutines.delay
@@ -69,6 +73,7 @@ fun RegisterScreen(
 
     var isLoading by remember { mutableStateOf(false) }
 
+
     val currentDate = LocalDate.now()
     val dateText = currentDate.format(DateTimeFormatter.ofPattern("EEE MMM dd yyyy"))
 
@@ -79,6 +84,43 @@ fun RegisterScreen(
         context.getSharedPreferences("yatra_prefs", Context.MODE_PRIVATE)
             .edit().putBoolean("isRegistered", true).apply()
     }
+
+    val viewModel: RegisterViewModel = viewModel()
+    val registrationState by viewModel.registrationState.collectAsState()
+
+
+// Updated LaunchedEffect in RegisterScreen to handle the new Failure state:
+
+    LaunchedEffect(registrationState) {
+        when (registrationState) {
+            is RegistrationState.Success -> {
+                Log.d("RegisterScreen", "Registration successful, navigating to main screen")
+                saveRegistered(context)
+                Toast.makeText(context, "Registration complete!", Toast.LENGTH_SHORT).show()
+                navController.navigate(Screen.Main.route) {
+                    popUpTo(Screen.Register.route) { inclusive = true }
+                }
+            }
+            is RegistrationState.Failure -> {
+                Log.e("RegisterScreen", "Registration failed: ${(registrationState as RegistrationState.Failure).message}")
+                isLoading = false
+                Toast.makeText(
+                    context,
+                    "Registration failed: ${(registrationState as RegistrationState.Failure).message}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            is RegistrationState.Loading -> {
+                Log.d("RegisterScreen", "Registration in progress...")
+                isLoading = true
+            }
+            is RegistrationState.Idle -> {
+                Log.d("RegisterScreen", "Registration state is idle")
+                isLoading = false
+            }
+        }
+    }
+
 
     // Timer for resend functionality
     LaunchedEffect(showOtpSection) {
@@ -97,19 +139,45 @@ fun RegisterScreen(
         isLoading = true
         FirebaseAuth.getInstance().signInWithCredential(credential)
             .addOnCompleteListener(activity) { task ->
-                isLoading = false
                 if (task.isSuccessful) {
-                    saveRegistered(context)
-                    Toast.makeText(context, "Registration successful!", Toast.LENGTH_SHORT).show()
-                    navController.navigate(Screen.Main.route) {
-                        popUpTo(Screen.Register.route) { inclusive = true }
+                    val user = FirebaseAuth.getInstance().currentUser
+                    if (user != null) {
+                        user.getIdToken(false).addOnSuccessListener { result ->
+                            val token = result.token
+                            if (token != null) {
+                                val request = RegisterRequest(
+                                    fullName = fullName,
+                                    gender = selectedGender,
+                                    dob = currentDate.toString(),
+                                    address = address,
+                                    nicNumber = nicNumber,
+                                    phoneNumber = phoneNumber
+                                )
+                                viewModel.registerUserWithBackend(context,request)
+                            } else {
+                                isLoading = false
+                                Toast.makeText(context, "JWT Token retrieval failed.", Toast.LENGTH_SHORT).show()
+                            }
+                        }.addOnFailureListener {
+                            isLoading = false
+                            Toast.makeText(context, "Token error: ${it.message}", Toast.LENGTH_LONG).show()
+                        }
                     }
                 } else {
-                    Toast.makeText(context, "Sign-in failed: ${task.exception?.message}", Toast.LENGTH_LONG).show()
+                    isLoading = false
+                    Toast.makeText(context, "Firebase sign-in failed: ${task.exception?.message}", Toast.LENGTH_LONG).show()
                 }
             }
     }
 
+    fun verifyOtp(otp: String) {
+        if (storedVerificationId.isNotEmpty() && otp.length == 6) {
+            val credential = PhoneAuthProvider.getCredential(storedVerificationId, otp)
+            verifyPhoneWithCredential(credential)
+        } else {
+            Toast.makeText(context, "Please enter a valid 6-digit OTP", Toast.LENGTH_SHORT).show()
+        }
+    }
     fun sendOtp(phone: String, isResend: Boolean = false) {
         isLoading = true
         val options = PhoneAuthOptions.newBuilder(FirebaseAuth.getInstance())
@@ -154,15 +222,6 @@ fun RegisterScreen(
             .build()
 
         PhoneAuthProvider.verifyPhoneNumber(options)
-    }
-
-    fun verifyOtp(otp: String) {
-        if (storedVerificationId.isNotEmpty() && otp.length == 6) {
-            val credential = PhoneAuthProvider.getCredential(storedVerificationId, otp)
-            verifyPhoneWithCredential(credential)
-        } else {
-            Toast.makeText(context, "Please enter a valid 6-digit OTP", Toast.LENGTH_SHORT).show()
-        }
     }
 
     val systemUiController = rememberSystemUiController()
@@ -378,7 +437,8 @@ fun RegisterScreen(
                             onClick = {
                                 verifyOtp(otpCode)
                             },
-                            modifier = Modifier
+
+                                    modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp),
                             shape = RoundedCornerShape(8.dp),
