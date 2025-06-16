@@ -25,12 +25,17 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+
     <!-- Required for Android 13+ (API 33+) for showing notifications -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"
         tools:targetApi="33" />
 
+    <!-- Alarm Manager and Boot permissions -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
-        android:name=".helper.YatraTrackApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -53,12 +58,28 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground service for WorkManager with proper location type -->
+        <!-- Location Tracking Service -->
         <service
-            android:name="androidx.work.impl.foreground.SystemForegroundService"
-            android:foregroundServiceType="location"
+            android:name=".helper.LocationTrackingService"
             android:exported="false"
-            tools:node="merge" />
+            android:foregroundServiceType="location" />
+
+        <!-- Alarm Receiver for periodic location fetching -->
+        <receiver
+            android:name=".helper.LocationAlarmReceiver"
+            android:exported="false" />
+
+        <!-- Boot Receiver to restart service after device restart -->
+        <receiver
+            android:name=".helper.BootReceiver"
+            android:exported="true">
+            <intent-filter android:priority="1000">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

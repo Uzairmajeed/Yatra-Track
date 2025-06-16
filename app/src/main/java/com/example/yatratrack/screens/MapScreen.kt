@@ -7,12 +7,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,7 +27,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.yatratrack.helper.LocationData
 import com.example.yatratrack.helper.LocationRepository
-import com.example.yatratrack.helper.WorkManagerHelper
+import com.example.yatratrack.helper.ServiceHelper
 import com.example.yatratrack.helper.rememberPermissionManager
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 import kotlinx.coroutines.delay
@@ -36,8 +37,8 @@ import kotlinx.coroutines.delay
 fun MapScreen(navController: NavController) {
     val context = LocalContext.current
     val locationRepository = remember { LocationRepository(context) }
-    val workManagerHelper = remember { WorkManagerHelper(context) }
-    val permissionManager = rememberPermissionManager(workManagerHelper)
+    val serviceHelper = remember { ServiceHelper(context) }
+    val permissionManager = rememberPermissionManager(serviceHelper)
 
     var locations by remember { mutableStateOf<List<LocationData>>(emptyList()) }
     var isLoadingLocation by remember { mutableStateOf(false) }
@@ -47,7 +48,7 @@ fun MapScreen(navController: NavController) {
     val systemUiController = rememberSystemUiController()
     SideEffect {
         systemUiController.setStatusBarColor(
-            color = Color(0xFF1565C0), // or MaterialTheme.colorScheme.primary
+            color = Color(0xFF1565C0),
             darkIcons = false
         )
     }
@@ -73,7 +74,7 @@ fun MapScreen(navController: NavController) {
             // Only fetch location immediately if this is the very first app launch
             if (isFirstAppLaunch()) {
                 isLoadingLocation = true
-                workManagerHelper.fetchLocationImmediately()
+                serviceHelper.fetchLocationImmediately()
 
                 // Mark as launched so this won't happen again
                 markAppAsLaunched()
@@ -85,9 +86,9 @@ fun MapScreen(navController: NavController) {
             }
 
             // Check if tracking is already active, restart if needed
-            if (!workManagerHelper.isLocationTrackingActive()) {
-                Log.d("MapScreen", "Restarting location tracking")
-                workManagerHelper.restartLocationTracking()
+            if (!serviceHelper.isLocationTrackingActive()) {
+                Log.d("MapScreen", "Starting location tracking")
+                serviceHelper.startLocationTracking()
             } else {
                 Log.d("MapScreen", "Location tracking already active")
             }
@@ -108,7 +109,7 @@ fun MapScreen(navController: NavController) {
     LaunchedEffect(shouldFetchLocation) {
         if (shouldFetchLocation) {
             isLoadingLocation = true
-            workManagerHelper.fetchLocationImmediately()
+            serviceHelper.fetchLocationImmediately()
             delay(3000)
             locations = locationRepository.getAllLocations()
             isLoadingLocation = false
@@ -120,8 +121,8 @@ fun MapScreen(navController: NavController) {
     LaunchedEffect(permissionJustGranted) {
         if (permissionJustGranted && permissionManager.isAllPermissionsGranted()) {
             isLoadingLocation = true
-            workManagerHelper.fetchLocationImmediately()
-            workManagerHelper.startLocationTracking()
+            serviceHelper.fetchLocationImmediately()
+            serviceHelper.startLocationTracking()
 
             // Mark as launched since we're fetching location now
             markAppAsLaunched()
@@ -133,14 +134,11 @@ fun MapScreen(navController: NavController) {
         }
     }
 
-    // Basic location permission launcher
+    // Permission launcher for basic location permissions
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         permissionManager.handleLocationPermissionResult(permissions)
-        if (permissionManager.isAllPermissionsGranted()) {
-            permissionJustGranted = true
-        }
     }
 
     // Background location permission launcher
@@ -148,8 +146,31 @@ fun MapScreen(navController: NavController) {
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         permissionManager.handleBackgroundLocationPermissionResult(granted)
-        if (granted && permissionManager.hasLocationPermission) {
-            permissionJustGranted = true
+    }
+
+    // Notification permission launcher
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        permissionManager.handleNotificationPermissionResult(granted)
+    }
+
+    // Request location permission when screen loads (if not already granted)
+    LaunchedEffect(permissionManager.hasLocationPermission) {
+        if (permissionManager.shouldRequestLocationPermission()) {
+            permissionLauncher.launch(permissionManager.getLocationPermissions())
+        }
+    }
+
+    // Request notification permission after location permissions are handled
+    LaunchedEffect(
+        permissionManager.hasLocationPermission,
+        permissionManager.hasBackgroundLocationPermission
+    ) {
+        if (permissionManager.hasLocationPermission &&
+            permissionManager.hasBackgroundLocationPermission &&
+            permissionManager.shouldRequestNotificationPermission()) {
+            notificationPermissionLauncher.launch(permissionManager.getNotificationPermission())
         }
     }
 
@@ -180,15 +201,41 @@ fun MapScreen(navController: NavController) {
         )
     }
 
+    // Battery Optimization Dialog
+    if (permissionManager.showBatteryOptimizationDialog) {
+        AlertDialog(
+            onDismissRequest = { permissionManager.dismissBatteryOptimizationDialog() },
+            title = { Text("Battery Optimization Settings") },
+            text = {
+                Text("To ensure continuous location tracking, please disable battery optimization for this app. This will prevent the system from stopping the app in the background.\n\nGo to: App Info → Battery → Allow background activity")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { permissionManager.openAppInfo() }
+                ) {
+                    Text("Open App Settings")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { permissionManager.dismissBatteryOptimizationDialog() }
+                ) {
+                    Text("Skip")
+                }
+            }
+        )
+    }
+
     Spacer(
         modifier = Modifier
             .fillMaxWidth()
             .height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding())
-            .background(Color(0xFF1565C0)) // same as status bar color
+            .background(Color(0xFF1565C0))
     )
+
     Column(
         modifier = Modifier.fillMaxSize()
-            .statusBarsPadding() // This ensures content starts below status bar
+            .statusBarsPadding()
     ) {
         // Top App Bar
         TopAppBar(
@@ -214,46 +261,41 @@ fun MapScreen(navController: NavController) {
                 .fillMaxSize()
                 .padding(16.dp)
         ) {
-            // Permission Card
-            if (!permissionManager.isAllPermissionsGranted()) {
+            // Enhanced permission status card (same as main screen)
+            if (!permissionManager.isAllPermissionsAndOptimizationsSet()) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))
                 ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "Location Permissions Required",
+                            text = "App Permissions & Settings",
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFFD32F2F)
                         )
+
+                        val statusText = when {
+                            !permissionManager.hasLocationPermission -> "✗ Location permission required"
+                            !permissionManager.hasBackgroundLocationPermission -> "✗ Background location permission needed"
+                            !permissionManager.hasNotificationPermission -> "✗ Notification permission needed"
+                            !permissionManager.isBatteryOptimizationDisabled -> "✗ Battery optimization should be disabled"
+                            else -> "✓ All permissions granted"
+                        }
+
                         Text(
-                            text = when {
-                                !permissionManager.hasLocationPermission -> "Basic location permission is required for tracking."
-                                !permissionManager.hasBackgroundLocationPermission -> "Background location permission is needed for continuous tracking when app is closed."
-                                else -> ""
-                            },
+                            text = statusText,
                             color = Color(0xFFD32F2F),
                             fontSize = 14.sp
                         )
+
+                        // Show individual permission status
                         Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                if (!permissionManager.hasLocationPermission) {
-                                    permissionLauncher.launch(permissionManager.getLocationPermissions())
-                                } else if (!permissionManager.hasBackgroundLocationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                    permissionManager.requestBackgroundLocationPermission(backgroundLocationLauncher)
-                                }
-                            }
-                        ) {
-                            Text(
-                                text = when {
-                                    !permissionManager.hasLocationPermission -> "Grant Location Permission"
-                                    !permissionManager.hasBackgroundLocationPermission -> "Grant Background Permission"
-                                    else -> "Grant Permission"
-                                }
-                            )
+                        Column {
+                            PermissionStatusRow("Location", permissionManager.hasLocationPermission)
+                            PermissionStatusRow("Background Location", permissionManager.hasBackgroundLocationPermission)
+                            PermissionStatusRow("Notifications", permissionManager.hasNotificationPermission)
+                            PermissionStatusRow("Battery Optimization", permissionManager.isBatteryOptimizationDisabled)
                         }
                     }
                 }
@@ -332,7 +374,7 @@ fun MapScreen(navController: NavController) {
                         },
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp), // ensures uniform height
+                            .height(48.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null)
@@ -394,10 +436,15 @@ fun MapScreen(navController: NavController) {
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(locations.reversed()) { location ->
+                        items(
+                            count = locations.size,
+                            key = { index -> locations.reversed()[index].timestamp }
+                        ) { index ->
+                            val location = locations.reversed()[index]
                             LocationItem(location = location)
                         }
                     }
+
                 } else if (!isLoadingLocation) {
                     Box(
                         modifier = Modifier
@@ -425,6 +472,7 @@ fun MapScreen(navController: NavController) {
         }
     }
 }
+
 
 @Composable
 fun LocationItem(location: LocationData) {

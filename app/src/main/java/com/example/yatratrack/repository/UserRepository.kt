@@ -19,7 +19,7 @@ class UserRepository(
         private const val TAG = "UserRepository"
 
         // ngrok URL (without trailing slash)
-        private const val BASE_URL = "https://5961-137-59-0-53.ngrok-free.app"
+        private const val BASE_URL = "https://7e23-2409-40d5-100f-b639-50b7-a1bc-6b77-e1e7.ngrok-free.app"
     }
 
 

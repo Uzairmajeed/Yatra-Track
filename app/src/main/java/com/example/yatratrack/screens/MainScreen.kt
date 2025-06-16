@@ -1,6 +1,5 @@
 package com.example.yatratrack.screens
 
-
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -29,7 +28,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.yatratrack.R
-import com.example.yatratrack.helper.WorkManagerHelper
 import com.example.yatratrack.helper.rememberPermissionManager
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 import kotlinx.coroutines.delay
@@ -40,6 +38,8 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.util.lerp
+import com.example.yatratrack.helper.ServiceHelper
+import com.example.yatratrack.navigation.Screen
 import kotlin.math.absoluteValue
 
 data class MenuOption(
@@ -51,8 +51,8 @@ data class MenuOption(
 @Composable
 fun MainScreen(navController: NavController) {
     val context = LocalContext.current
-    val workManagerHelper = remember { WorkManagerHelper(context) }
-    val permissionManager = rememberPermissionManager(workManagerHelper)
+    val serviceHelperHelper = remember { ServiceHelper(context) }
+    val permissionManager = rememberPermissionManager(serviceHelperHelper)
     var selectedOption by remember { mutableStateOf<String?>(null) }
     val systemUiController = rememberSystemUiController()
 
@@ -82,10 +82,29 @@ fun MainScreen(navController: NavController) {
         permissionManager.handleBackgroundLocationPermissionResult(granted)
     }
 
-    // Request permission when screen loads (if not already granted)
+    // Notification permission launcher
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        permissionManager.handleNotificationPermissionResult(granted)
+    }
+
+    // Request location permission when screen loads (if not already granted)
     LaunchedEffect(permissionManager.hasLocationPermission) {
         if (permissionManager.shouldRequestLocationPermission()) {
             permissionLauncher.launch(permissionManager.getLocationPermissions())
+        }
+    }
+
+    // Request notification permission after location permissions are handled
+    LaunchedEffect(
+        permissionManager.hasLocationPermission,
+        permissionManager.hasBackgroundLocationPermission
+    ) {
+        if (permissionManager.hasLocationPermission &&
+            permissionManager.hasBackgroundLocationPermission &&
+            permissionManager.shouldRequestNotificationPermission()) {
+            notificationPermissionLauncher.launch(permissionManager.getNotificationPermission())
         }
     }
 
@@ -116,51 +135,61 @@ fun MainScreen(navController: NavController) {
         )
     }
 
-    val menuOptions = listOf(
-//        MenuOption(
-//            title = "Battery\nOptimization",
-//            icon = Icons.Default.Settings
-//        ) {
-//            // Open battery optimization settings
-//            try {
-//                val intent = Intent()
-//                intent.action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-//                intent.data = Uri.parse("package:${context.packageName}")
-//                context.startActivity(intent)
-//            } catch (e: Exception) {
-//                selectedOption = "Please disable battery optimization for this app in Settings > Apps > Yatra Track > Battery"
-//            }
-//        },
+    // Battery Optimization Dialog
+    if (permissionManager.showBatteryOptimizationDialog) {
+        AlertDialog(
+            onDismissRequest = { permissionManager.dismissBatteryOptimizationDialog() },
+            title = { Text("Battery Optimization Settings") },
+            text = {
+                Text("To ensure continuous location tracking, please disable battery optimization for this app. This will prevent the system from stopping the app in the background.\n\nGo to: App Info → Battery → Allow background activity")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { permissionManager.openAppInfo() }
+                ) {
+                    Text("Open App Settings")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { permissionManager.dismissBatteryOptimizationDialog() }
+                ) {
+                    Text("Skip")
+                }
+            }
+        )
+    }
 
+    val menuOptions = listOf(
         MenuOption(
             title = "Nearby\nHospitals",
             icon = Icons.Default.Home
-        ) { selectedOption = "Nearby Hospitals - Data not available for now" },
+        ) { navController.navigate(Screen.Hospital.route) } ,
 
         MenuOption(
             title = "Nearby Langers",
             icon = Icons.Default.CheckCircle
-        ) { selectedOption = "Nearby Langers - Data not available for now" },
+        ) { navController.navigate(Screen.Langars.route) },
 
         MenuOption(
             title = "Nearby Police\nStations",
             icon = Icons.Default.Home
-        ) { selectedOption = "Nearby Police Stations - Data not available for now" },
+        ) { navController.navigate(Screen.PoliceStations.route) },
 
         MenuOption(
             title = "Emergency\nContacts",
             icon = Icons.Default.Call
-        ) { selectedOption = "Emergency Contacts - Data not available for now" },
+        ) { navController.navigate(Screen.EmergencyContacts.route) },
 
         MenuOption(
             title = "Interesting\nPlaces",
             icon = Icons.Default.Place
-        ) { selectedOption = "Interesting Places - Data not available for now" },
+        ) { navController.navigate(Screen.InterestingPlaces.route) },
 
         MenuOption(
             title = "Map",
             icon = Icons.Default.LocationOn
-        ) { navController.navigate("map") }
+        ) { navController.navigate(Screen.MapScreen.route) }
     )
 
     Spacer(
@@ -227,8 +256,8 @@ fun MainScreen(navController: NavController) {
             )
         }
 
-        // Permission status card
-        if (!permissionManager.isAllPermissionsGranted()) {
+        // Enhanced permission status card
+        if (!permissionManager.isAllPermissionsAndOptimizationsSet()) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -237,19 +266,33 @@ fun MainScreen(navController: NavController) {
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Location Permissions Required",
+                        text = "App Permissions & Settings",
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFFD32F2F)
                     )
+
+                    val statusText = when {
+                        !permissionManager.hasLocationPermission -> "✗ Location permission required"
+                        !permissionManager.hasBackgroundLocationPermission -> "✗ Background location permission needed"
+                        !permissionManager.hasNotificationPermission -> "✗ Notification permission needed"
+                        !permissionManager.isBatteryOptimizationDisabled -> "✗ Battery optimization should be disabled"
+                        else -> "✓ All permissions granted"
+                    }
+
                     Text(
-                        text = when {
-                            !permissionManager.hasLocationPermission -> "Basic location permission is required"
-                            !permissionManager.hasBackgroundLocationPermission -> "Background location permission needed for continuous tracking"
-                            else -> ""
-                        },
+                        text = statusText,
                         color = Color(0xFFD32F2F),
                         fontSize = 14.sp
                     )
+
+                    // Show individual permission status
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Column {
+                        PermissionStatusRow("Location", permissionManager.hasLocationPermission)
+                        PermissionStatusRow("Background Location", permissionManager.hasBackgroundLocationPermission)
+                        PermissionStatusRow("Notifications", permissionManager.hasNotificationPermission)
+                        PermissionStatusRow("Battery Optimization", permissionManager.isBatteryOptimizationDisabled)
+                    }
                 }
             }
         }
@@ -319,6 +362,27 @@ fun MainScreen(navController: NavController) {
                 )
             }
         }
+    }
+}
+
+@Composable
+fun PermissionStatusRow(permissionName: String, isGranted: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (isGranted) Icons.Default.CheckCircle else Icons.Default.Close,
+            contentDescription = null,
+            tint = if (isGranted) Color(0xFF4CAF50) else Color(0xFFD32F2F),
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = permissionName,
+            fontSize = 12.sp,
+            color = if (isGranted) Color(0xFF4CAF50) else Color(0xFFD32F2F)
+        )
     }
 }
 

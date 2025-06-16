@@ -7,9 +7,14 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.example.yatratrack.screens.EmergencyContactsScreen
+import com.example.yatratrack.screens.HospitalScreen
+import com.example.yatratrack.screens.InterestingPlacesScreen
+import com.example.yatratrack.screens.LangarScreen
 import com.example.yatratrack.screens.LoginScreen
 import com.example.yatratrack.screens.MainScreen
 import com.example.yatratrack.screens.MapScreen
+import com.example.yatratrack.screens.PoliceStationScreen
 import com.example.yatratrack.screens.RegisterScreen
 
 sealed class Screen(val route: String) {
@@ -17,6 +22,11 @@ sealed class Screen(val route: String) {
     object Register : Screen("register")
     object Main : Screen("main")
     object MapScreen: Screen("map")
+    object Hospital : Screen("hospital")
+    object PoliceStations : Screen("policeStations")
+    object Langars : Screen("langars")
+    object EmergencyContacts : Screen("emergencyContacts")
+    object InterestingPlaces : Screen("interestingPlaces")
 }
 
 @Composable
@@ -38,5 +48,10 @@ fun AppNavHost(
         composable(Screen.Register.route) { RegisterScreen(navController) }
         composable(Screen.Main.route) { MainScreen(navController) }
         composable(Screen.MapScreen.route) { MapScreen(navController) }
+        composable(Screen.Hospital.route) { HospitalScreen(navController) }
+        composable(Screen.PoliceStations.route) { PoliceStationScreen(navController) }
+        composable(Screen.Langars.route) { LangarScreen(navController) }
+        composable(Screen.EmergencyContacts.route) { EmergencyContactsScreen(navController) }
+        composable(Screen.InterestingPlaces.route) { InterestingPlacesScreen(navController) }
     }
 }
